@@ -98,15 +98,10 @@ namespace DSR_QuickWarp
             catch (InvalidOperationException)
             {
             }
-            catch (ObjectDisposedException)
-            {
-            }
         }
 
         private void OnInjectTick(object sender, EventArgs e)
         {
-            // Fallback in addition to OnUnhooked: once QuickWarp has attached to a
-            // game process, it should never linger after that game process is gone.
             if (_gameWasHooked && !_hook.Hooked)
             {
                 Close();
@@ -179,8 +174,6 @@ namespace DSR_QuickWarp
                         return;
                     }
 
-                    // Give the target map a few frames after PlayerIns reappears before
-                    // writing the final coordinates. This prevents landing during load setup.
                     if ((now - _pendingWarp.MapReadySinceUtc.Value).TotalMilliseconds < 450)
                         return;
 
@@ -392,8 +385,6 @@ namespace DSR_QuickWarp
                 if (targetGroup <= 0)
                     return "Saved point has no supported map group.";
 
-                // AreaIDs can differ inside one already-loaded map. In that case the
-                // stable v0.1 coordinate warp is enough; no loading transition is needed.
                 if (player.MapGroup == targetGroup)
                 {
                     player.Warp(new QuickWarpPlayer.Position(target.X, target.Y, target.Z, target.Angle));
