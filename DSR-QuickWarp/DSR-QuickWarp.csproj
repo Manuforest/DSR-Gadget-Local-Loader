@@ -36,6 +36,10 @@
     <Reference Include="System.Drawing" />
     <Reference Include="System.Runtime.Serialization" />
     <Reference Include="System.Windows.Forms" />
+    <Reference Include="PropertyHook">
+      <HintPath>..\PropertyHook\PropertyHook\bin\Release\PropertyHook.dll</HintPath>
+      <Private>true</Private>
+    </Reference>
   </ItemGroup>
   <ItemGroup>
     <Compile Include="Program.cs" />
@@ -49,12 +53,6 @@
     <Compile Include="..\DSR-Gadget\Util\DSROffsets.cs">
       <Link>DSROffsets.cs</Link>
     </Compile>
-  </ItemGroup>
-  <ItemGroup>
-    <ProjectReference Include="..\PropertyHook\PropertyHook\PropertyHook.csproj">
-      <Project>{18EFF8D2-C4D5-4E18-9A31-38E106BA1CF7}</Project>
-      <Name>PropertyHook</Name>
-    </ProjectReference>
   </ItemGroup>
   <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets" />
 </Project>

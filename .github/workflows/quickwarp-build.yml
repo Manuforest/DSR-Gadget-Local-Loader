@@ -28,6 +28,9 @@ jobs:
 
       - uses: microsoft/setup-msbuild@v2
 
+      - name: Build PropertyHook
+        run: msbuild PropertyHook\PropertyHook\PropertyHook.csproj /m /p:Configuration=Release /p:Platform=AnyCPU
+
       - name: Build QuickWarp
         run: msbuild DSR-QuickWarp\DSR-QuickWarp.csproj /m /p:Configuration=Release /p:Platform=x64
 
