@@ -9,7 +9,7 @@ if (!(Test-Path $propertyHookProject)) {
 
 Push-Location $repoRoot
 try {
-    msbuild 'PropertyHook\PropertyHook\PropertyHook.csproj' /m /p:Configuration=Release /p:Platform=AnyCPU
+    msbuild 'PropertyHook\PropertyHook\PropertyHook.csproj' /m /p:Configuration=Release /p:Platform=AnyCPU /p:TargetFrameworkVersion=v4.7.2
     msbuild 'DSR-QuickWarp\DSR-QuickWarp.csproj' /m /p:Configuration=Release /p:Platform=x64
 }
 finally {
