@@ -87,11 +87,19 @@ namespace quickwarp
 
                 if (!_running)
                     break;
-                if (_commands.empty())
-                    continue;
 
-                command = std::move(_commands.front());
-                _commands.pop_front();
+                if (_commands.empty())
+                {
+                    // Poll lightweight host state while idle. This lets the injected
+                    // overlay receive completion/timeout status from asynchronous
+                    // cross-map warps without needing another user key press.
+                    command = "STATE";
+                }
+                else
+                {
+                    command = std::move(_commands.front());
+                    _commands.pop_front();
+                }
             }
 
             Snapshot next;
