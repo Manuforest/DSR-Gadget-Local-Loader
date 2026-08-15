@@ -3,26 +3,49 @@ using System.Globalization;
 using System.IO;
 using System.Text;
 using System.Windows.Forms;
+using PropertyHook;
 
 namespace DSR_QuickWarp
 {
     internal sealed class QuickWarpHost : Form
     {
+        private sealed class PendingWarp
+        {
+            internal WarpPoint Target;
+            internal int MapGroup;
+            internal DateTime StartedUtc;
+            internal DateTime? MapReadySinceUtc;
+        }
+
         private readonly object _gate = new object();
         private readonly QuickWarpHook _hook;
         private readonly WarpStore _store;
         private readonly PipeBridge _pipe;
         private readonly Timer _injectTimer;
+        private readonly Timer _warpTimer;
         private int _injectedProcessId = -1;
         private string _lastInjectError;
+        private bool _gameWasHooked;
+        private PendingWarp _pendingWarp;
+        private string _backgroundStatus = "Ready";
+        private bool _backgroundSuccess = true;
+        private bool _backgroundCloseMenu;
+        private DateTime _backgroundStatusUntilUtc = DateTime.MinValue;
 
         internal QuickWarpHost()
         {
             _hook = new QuickWarpHook();
             _store = new WarpStore();
             _pipe = new PipeBridge(HandlePipeCommand);
+
             _injectTimer = new Timer { Interval = 750 };
             _injectTimer.Tick += OnInjectTick;
+
+            _warpTimer = new Timer { Interval = 100 };
+            _warpTimer.Tick += OnWarpTick;
+
+            _hook.OnHooked += OnGameHooked;
+            _hook.OnUnhooked += OnGameUnhooked;
 
             Text = "DSR QuickWarp Host";
             ShowInTaskbar = false;
@@ -43,18 +66,53 @@ namespace DSR_QuickWarp
             _pipe.Start();
             _hook.Start();
             _injectTimer.Start();
+            _warpTimer.Start();
             Hide();
         }
 
         private void OnClosed(object sender, FormClosedEventArgs e)
         {
             _injectTimer.Stop();
+            _warpTimer.Stop();
+            _hook.OnHooked -= OnGameHooked;
+            _hook.OnUnhooked -= OnGameUnhooked;
             _pipe.Stop();
             _hook.Stop();
         }
 
+        private void OnGameHooked(object sender, PHEventArgs e)
+        {
+            _gameWasHooked = true;
+        }
+
+        private void OnGameUnhooked(object sender, PHEventArgs e)
+        {
+            if (!_gameWasHooked || IsDisposed || Disposing)
+                return;
+
+            try
+            {
+                if (IsHandleCreated)
+                    BeginInvoke((Action)Close);
+            }
+            catch (InvalidOperationException)
+            {
+            }
+            catch (ObjectDisposedException)
+            {
+            }
+        }
+
         private void OnInjectTick(object sender, EventArgs e)
         {
+            // Fallback in addition to OnUnhooked: once QuickWarp has attached to a
+            // game process, it should never linger after that game process is gone.
+            if (_gameWasHooked && !_hook.Hooked)
+            {
+                Close();
+                return;
+            }
+
             if (!_hook.Hooked || _hook.Process == null || _hook.Process.HasExited)
             {
                 _injectedProcessId = -1;
@@ -85,6 +143,59 @@ namespace DSR_QuickWarp
             }
         }
 
+        private void OnWarpTick(object sender, EventArgs e)
+        {
+            lock (_gate)
+            {
+                if (_pendingWarp == null)
+                    return;
+
+                DateTime now = DateTime.UtcNow;
+                if ((now - _pendingWarp.StartedUtc).TotalSeconds > 20)
+                {
+                    _pendingWarp = null;
+                    SetBackgroundStatus("Cross-map warp timed out.", false, false, 4);
+                    return;
+                }
+
+                if (!_hook.Ready)
+                    return;
+
+                try
+                {
+                    QuickWarpPlayer player = _hook.GetPlayer();
+                    if (!player.Ready)
+                        return;
+
+                    if (player.MapGroup != _pendingWarp.MapGroup)
+                    {
+                        _pendingWarp.MapReadySinceUtc = null;
+                        return;
+                    }
+
+                    if (!_pendingWarp.MapReadySinceUtc.HasValue)
+                    {
+                        _pendingWarp.MapReadySinceUtc = now;
+                        return;
+                    }
+
+                    // Give the target map a few frames after PlayerIns reappears before
+                    // writing the final coordinates. This prevents landing during load setup.
+                    if ((now - _pendingWarp.MapReadySinceUtc.Value).TotalMilliseconds < 450)
+                        return;
+
+                    WarpPoint target = _pendingWarp.Target;
+                    player.Warp(new QuickWarpPlayer.Position(target.X, target.Y, target.Z, target.Angle));
+                    _pendingWarp = null;
+                    SetBackgroundStatus("Warped", true, true, 3);
+                }
+                catch (Exception ex)
+                {
+                    Log("Pending cross-map warp check failed: " + ex.Message);
+                }
+            }
+        }
+
         private string HandlePipeCommand(string command)
         {
             lock (_gate)
@@ -102,6 +213,7 @@ namespace DSR_QuickWarp
                     {
                         case "STATE":
                         case "PING":
+                            GetBackgroundStatus(out success, out closeMenu, out message);
                             break;
 
                         case "SAVE_QUICK":
@@ -111,7 +223,7 @@ namespace DSR_QuickWarp
 
                         case "WARP_QUICK":
                             message = WarpQuickPoint();
-                            success = message == "Warped";
+                            success = IsWarpAccepted(message);
                             closeMenu = success;
                             break;
 
@@ -131,7 +243,7 @@ namespace DSR_QuickWarp
                             else
                             {
                                 message = WarpPermanentPoint(index);
-                                success = message == "Warped";
+                                success = IsWarpAccepted(message);
                                 closeMenu = success;
                             }
                             break;
@@ -169,6 +281,11 @@ namespace DSR_QuickWarp
             }
         }
 
+        private static bool IsWarpAccepted(string message)
+        {
+            return message == "Warped" || message == "Loading target map...";
+        }
+
         private bool TryGetCurrentPoint(string name, out WarpPoint point, out string error)
         {
             point = null;
@@ -194,12 +311,21 @@ namespace DSR_QuickWarp
                 {
                     Name = name,
                     AreaId = player.AreaId,
+                    MapGroup = player.MapGroup,
                     X = pos.X,
                     Y = pos.Y,
                     Z = pos.Z,
                     Angle = pos.Angle,
                     SavedAt = DateTime.Now.ToString("s")
                 };
+
+                if (point.MapGroup <= 0)
+                {
+                    error = "This location has no supported map group.";
+                    point = null;
+                    return false;
+                }
+
                 return true;
             }
             catch (Exception ex)
@@ -250,6 +376,9 @@ namespace DSR_QuickWarp
 
         private string WarpTo(WarpPoint target)
         {
+            if (_pendingWarp != null)
+                return "Another cross-map warp is already in progress.";
+
             if (!_hook.Ready)
                 return "Game/player is not ready.";
 
@@ -259,11 +388,36 @@ namespace DSR_QuickWarp
                 if (!player.Ready)
                     return "Player is not loaded yet.";
 
-                if (player.AreaId != target.AreaId)
-                    return "Different area: cross-area warp is not enabled yet.";
+                int targetGroup = WarpMap.GetGroup(target);
+                if (targetGroup <= 0)
+                    return "Saved point has no supported map group.";
 
-                player.Warp(new QuickWarpPlayer.Position(target.X, target.Y, target.Z, target.Angle));
-                return "Warped";
+                // AreaIDs can differ inside one already-loaded map. In that case the
+                // stable v0.1 coordinate warp is enough; no loading transition is needed.
+                if (player.MapGroup == targetGroup)
+                {
+                    player.Warp(new QuickWarpPlayer.Position(target.X, target.Y, target.Z, target.Angle));
+                    SetBackgroundStatus("Warped", true, true, 2);
+                    return "Warped";
+                }
+
+                int anchorBonfire;
+                if (!WarpMap.TryGetAnchorBonfire(targetGroup, out anchorBonfire))
+                    return "No safe loading anchor is known for this map.";
+
+                string error;
+                if (!_hook.TryBonfireWarp(anchorBonfire, out error))
+                    return error;
+
+                _pendingWarp = new PendingWarp
+                {
+                    Target = target,
+                    MapGroup = targetGroup,
+                    StartedUtc = DateTime.UtcNow,
+                    MapReadySinceUtc = null
+                };
+                SetBackgroundStatus("Loading target map...", true, true, 25);
+                return "Loading target map...";
             }
             catch (Exception ex)
             {
@@ -282,6 +436,30 @@ namespace DSR_QuickWarp
             return name + " deleted";
         }
 
+        private void SetBackgroundStatus(string message, bool success, bool closeMenu, int seconds)
+        {
+            _backgroundStatus = message;
+            _backgroundSuccess = success;
+            _backgroundCloseMenu = closeMenu;
+            _backgroundStatusUntilUtc = DateTime.UtcNow.AddSeconds(seconds);
+        }
+
+        private void GetBackgroundStatus(out bool success, out bool closeMenu, out string message)
+        {
+            if (_backgroundStatusUntilUtc > DateTime.UtcNow)
+            {
+                success = _backgroundSuccess;
+                closeMenu = _backgroundCloseMenu;
+                message = _backgroundStatus;
+            }
+            else
+            {
+                success = true;
+                closeMenu = false;
+                message = "Ready";
+            }
+        }
+
         private string BuildSnapshot(bool success, bool closeMenu, string message)
         {
             StringBuilder builder = new StringBuilder();
@@ -297,20 +475,20 @@ namespace DSR_QuickWarp
             else
             {
                 builder.Append("QUICK|");
-                AppendPoint(builder, _store.Database.Quick, false, -1);
+                AppendPoint(builder, _store.Database.Quick);
             }
 
             for (int i = 0; i < _store.Database.Points.Count; i++)
             {
                 builder.Append("POINT|").Append(i).Append('|');
-                AppendPoint(builder, _store.Database.Points[i], true, i);
+                AppendPoint(builder, _store.Database.Points[i]);
             }
 
             builder.Append("END\n");
             return builder.ToString();
         }
 
-        private static void AppendPoint(StringBuilder builder, WarpPoint point, bool indexAlreadyWritten, int index)
+        private static void AppendPoint(StringBuilder builder, WarpPoint point)
         {
             builder.Append(Encode(point.Name)).Append('|')
                 .Append(point.AreaId.ToString(CultureInfo.InvariantCulture)).Append('|')
