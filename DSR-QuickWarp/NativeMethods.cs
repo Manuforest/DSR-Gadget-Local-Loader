@@ -5,43 +5,55 @@ namespace DSR_QuickWarp
 {
     internal static class NativeMethods
     {
-        internal const int WM_HOTKEY = 0x0312;
-        internal const uint MOD_CONTROL = 0x0002;
-        internal const uint MOD_NOREPEAT = 0x4000;
+        [DllImport("kernel32.dll", SetLastError = true)]
+        internal static extern IntPtr OpenProcess(uint desiredAccess, bool inheritHandle, int processId);
 
-        internal const uint VK_F6 = 0x75;
-        internal const uint VK_F7 = 0x76;
-        internal const uint VK_F8 = 0x77;
+        [DllImport("kernel32.dll", SetLastError = true)]
+        internal static extern IntPtr VirtualAllocEx(
+            IntPtr process,
+            IntPtr address,
+            UIntPtr size,
+            uint allocationType,
+            uint protection);
 
-        [DllImport("user32.dll", SetLastError = true)]
+        [DllImport("kernel32.dll", SetLastError = true)]
         [return: MarshalAs(UnmanagedType.Bool)]
-        internal static extern bool RegisterHotKey(IntPtr hWnd, int id, uint fsModifiers, uint vk);
+        internal static extern bool VirtualFreeEx(IntPtr process, IntPtr address, UIntPtr size, uint freeType);
 
-        [DllImport("user32.dll", SetLastError = true)]
+        [DllImport("kernel32.dll", SetLastError = true)]
         [return: MarshalAs(UnmanagedType.Bool)]
-        internal static extern bool UnregisterHotKey(IntPtr hWnd, int id);
+        internal static extern bool WriteProcessMemory(
+            IntPtr process,
+            IntPtr baseAddress,
+            byte[] buffer,
+            UIntPtr size,
+            out UIntPtr numberOfBytesWritten);
 
-        [DllImport("user32.dll")]
-        internal static extern IntPtr GetForegroundWindow();
+        [DllImport("kernel32.dll", SetLastError = true)]
+        internal static extern IntPtr CreateRemoteThread(
+            IntPtr process,
+            IntPtr threadAttributes,
+            UIntPtr stackSize,
+            IntPtr startAddress,
+            IntPtr parameter,
+            uint creationFlags,
+            IntPtr threadId);
 
-        [DllImport("user32.dll")]
-        internal static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint processId);
+        [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+        internal static extern IntPtr GetModuleHandle(string moduleName);
 
-        [DllImport("user32.dll")]
+        [DllImport("kernel32.dll", CharSet = CharSet.Ansi, SetLastError = true)]
+        internal static extern IntPtr GetProcAddress(IntPtr module, string procName);
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        internal static extern uint WaitForSingleObject(IntPtr handle, uint milliseconds);
+
+        [DllImport("kernel32.dll", SetLastError = true)]
         [return: MarshalAs(UnmanagedType.Bool)]
-        internal static extern bool SetForegroundWindow(IntPtr hWnd);
+        internal static extern bool GetExitCodeThread(IntPtr thread, out uint exitCode);
 
-        [DllImport("user32.dll")]
+        [DllImport("kernel32.dll", SetLastError = true)]
         [return: MarshalAs(UnmanagedType.Bool)]
-        internal static extern bool GetWindowRect(IntPtr hWnd, out RECT rect);
-
-        [StructLayout(LayoutKind.Sequential)]
-        internal struct RECT
-        {
-            public int Left;
-            public int Top;
-            public int Right;
-            public int Bottom;
-        }
+        internal static extern bool CloseHandle(IntPtr handle);
     }
 }
