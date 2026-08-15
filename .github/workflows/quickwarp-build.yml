@@ -3,15 +3,20 @@ name: QuickWarp Build
 on:
   push:
     branches:
-      - feature/quickwarp-v0.1
+      - feature/quickwarp-v0.2
     paths:
       - 'DSR-QuickWarp/**'
+      - 'DSR-QuickWarp-Native/**'
       - 'DSR-Gadget/Util/DSROffsets.cs'
+      - 'build-quickwarp-v0.2.ps1'
+      - 'QUICKWARP.md'
       - '.github/workflows/quickwarp-build.yml'
   pull_request:
     paths:
       - 'DSR-QuickWarp/**'
+      - 'DSR-QuickWarp-Native/**'
       - 'DSR-Gadget/Util/DSROffsets.cs'
+      - '.github/workflows/quickwarp-build.yml'
 
 jobs:
   build:
@@ -26,18 +31,41 @@ jobs:
             git clone --depth 1 https://github.com/Meikk99/PropertyHook.git PropertyHook
           }
 
+      - name: Fetch Dear ImGui
+        shell: pwsh
+        run: |
+          git clone https://github.com/ocornut/imgui.git third_party\imgui
+          git -C third_party\imgui checkout 46d39d56febc2a00bdd2270dc88c8a13f2a0441a
+
+      - name: Fetch MinHook
+        shell: pwsh
+        run: |
+          git clone https://github.com/TsudaKageyu/minhook.git third_party\minhook
+          git -C third_party\minhook checkout d94c64d32ea37bc4f5ee47d580709f70c6fb6080
+
       - uses: microsoft/setup-msbuild@v2
 
       - name: Build PropertyHook
         run: msbuild PropertyHook\PropertyHook\PropertyHook.csproj /m /p:Configuration=Release /p:Platform=AnyCPU /p:TargetFrameworkVersion=v4.7.2
 
-      - name: Build QuickWarp
+      - name: Build QuickWarp host
         run: msbuild DSR-QuickWarp\DSR-QuickWarp.csproj /m /p:Configuration=Release /p:Platform=x64
+
+      - name: Build QuickWarp native overlay
+        run: msbuild DSR-QuickWarp-Native\DSR-QuickWarp-Native.vcxproj /m /p:Configuration=Release /p:Platform=x64
+
+      - name: Stage QuickWarp package
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path package | Out-Null
+          Copy-Item 'DSR-QuickWarp\bin\x64\Release\DSR QuickWarp.exe' package
+          Copy-Item 'DSR-QuickWarp\bin\x64\Release\PropertyHook.dll' package
+          Copy-Item 'DSR-QuickWarp-Native\bin\x64\Release\DSR QuickWarp Overlay.dll' package
+          Copy-Item 'QUICKWARP.md' package
+          Copy-Item 'THIRD_PARTY.md' package
 
       - name: Upload QuickWarp
         uses: actions/upload-artifact@v4
         with:
-          name: DSR-QuickWarp-v0.1
-          path: |
-            DSR-QuickWarp\bin\x64\Release\DSR QuickWarp.exe
-            DSR-QuickWarp\bin\x64\Release\PropertyHook.dll
+          name: DSR-QuickWarp-v0.2
+          path: package\**
