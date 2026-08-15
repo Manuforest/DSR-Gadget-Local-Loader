@@ -1,0 +1,43 @@
+name: QuickWarp Build
+
+on:
+  push:
+    branches:
+      - feature/quickwarp-v0.1
+    paths:
+      - 'DSR-QuickWarp/**'
+      - 'DSR-Gadget/Util/DSROffsets.cs'
+      - '.github/workflows/quickwarp-build.yml'
+  pull_request:
+    paths:
+      - 'DSR-QuickWarp/**'
+      - 'DSR-Gadget/Util/DSROffsets.cs'
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Fetch PropertyHook dependency
+        shell: pwsh
+        run: |
+          if (!(Test-Path 'PropertyHook\PropertyHook\PropertyHook.csproj')) {
+            git clone --depth 1 https://github.com/Meikk99/PropertyHook.git PropertyHook
+          }
+
+      - uses: microsoft/setup-msbuild@v2
+
+      - name: Build PropertyHook
+        run: msbuild PropertyHook\PropertyHook\PropertyHook.csproj /m /p:Configuration=Release /p:Platform=AnyCPU /p:TargetFrameworkVersion=v4.7.2
+
+      - name: Build QuickWarp
+        run: msbuild DSR-QuickWarp\DSR-QuickWarp.csproj /m /p:Configuration=Release /p:Platform=x64
+
+      - name: Upload QuickWarp
+        uses: actions/upload-artifact@v4
+        with:
+          name: DSR-QuickWarp-v0.1
+          path: |
+            DSR-QuickWarp\bin\x64\Release\DSR QuickWarp.exe
+            DSR-QuickWarp\bin\x64\Release\PropertyHook.dll
