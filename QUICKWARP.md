@@ -4,7 +4,7 @@ QuickWarp is a lightweight offline companion mod for **Dark Souls: Remastered**.
 
 ## v0.2
 
-v0.2 keeps the tested PropertyHook position/warp code from v0.1, but replaces the external WinForms menu with an injected DirectX 11 / Dear ImGui overlay.
+v0.2 keeps the tested PropertyHook position/warp code from v0.1, replaces the external WinForms menu with an injected DirectX 11 / Dear ImGui overlay, and adds cross-map saved-point warping.
 
 ### Controls
 
@@ -30,18 +30,35 @@ Keep these three files together in any writable folder:
 3. The host attaches to the game and injects the overlay automatically.
 4. Press `F8` in game.
 
-Saved points remain in `quickwarp.json` beside the executable, so v0.1 saves continue to work.
+Saved points remain in `quickwarp.json` beside the executable. Existing v0.1/v0.2 point files remain compatible; missing map-group data is inferred from the stored AreaID.
+
+QuickWarp now exits automatically after the Dark Souls: Remastered process it attached to closes.
+
+## Cross-map warp
+
+When the saved point belongs to the currently loaded map group, QuickWarp uses the same direct position warp proven stable in v0.1.
+
+When the saved point belongs to another map group, QuickWarp:
+
+1. Chooses a known safe bonfire in the destination map as a temporary loading anchor.
+2. Temporarily points the game's `LastBonfire` field at that anchor.
+3. Calls the game's own bonfire-warp function to load the destination map.
+4. Immediately restores the player's original `LastBonfire`, so normal death/respawn behavior is not intentionally changed.
+5. Waits for the destination map/player state to become available and remain stable for several frames.
+6. Applies the saved X/Y/Z/angle as the final precise destination.
+
+A cross-map warp times out rather than forcing coordinates if the target map does not become ready.
+
+Known loading anchors currently cover the standard map groups for Depths, Undead Burg/Parish, Firelink, Painted World, Darkroot, Oolacile, Catacombs, Tomb of the Giants, Ash Lake/Great Hollow, Blighttown, Demon Ruins/Lost Izalith, Sen's Fortress, Anor Londo, New Londo, Duke's Archives/Crystal Cave, Kiln, and Northern Undead Asylum.
 
 ## Safety boundary
 
-v0.2 intentionally allows position warps only when the current `AreaID` matches the saved point. Cross-map loading is a separate feature and is not attempted by this build.
-
-This project modifies live game process state and is intended for offline use.
+This project modifies live game process state and is intended for offline use. Cross-map warp uses the game's own map-loading path before performing the final coordinate warp; it does not directly force coordinates into an unloaded map.
 
 ## Architecture
 
-- C# host: PropertyHook, player coordinates, persistence, injection, named-pipe server.
+- C# host: PropertyHook, player coordinates, persistence, map-loading state machine, injection, named-pipe server.
 - Native x64 overlay: DirectX 11 Present/ResizeBuffers hooks, Dear ImGui rendering, keyboard input.
-- IPC: `\\.\pipe\DSRQuickWarp` with a small line-based protocol.
+- IPC: `\\.\pipe\DSRQuickWarp` with a small line-based protocol. The overlay polls lightweight host state while idle so asynchronous map-warp completion and timeout status can be shown in game.
 
 The native overlay uses Dear ImGui and MinHook at build time; source dependencies are pinned by the build script / GitHub Actions rather than committed into this repository.
