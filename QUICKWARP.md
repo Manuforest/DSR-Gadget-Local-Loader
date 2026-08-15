@@ -32,7 +32,7 @@ Keep these three files together in any writable folder:
 
 Saved points remain in `quickwarp.json` beside the executable. Existing v0.1/v0.2 point files remain compatible; missing map-group data is inferred from the stored AreaID.
 
-QuickWarp now exits automatically after the Dark Souls: Remastered process it attached to closes.
+QuickWarp exits automatically after the Dark Souls: Remastered process it attached to closes.
 
 ## Cross-map warp
 
@@ -50,6 +50,23 @@ When the saved point belongs to another map group, QuickWarp:
 A cross-map warp times out rather than forcing coordinates if the target map does not become ready.
 
 Known loading anchors currently cover the standard map groups for Depths, Undead Burg/Parish, Firelink, Painted World, Darkroot, Oolacile, Catacombs, Tomb of the Giants, Ash Lake/Great Hollow, Blighttown, Demon Ruins/Lost Izalith, Sen's Fortress, Anor Londo, New Londo, Duke's Archives/Crystal Cave, Kiln, and Northern Undead Asylum.
+
+### Cross-map test checklist
+
+For the first runtime pass, use two ordinary non-boss locations in clearly different map groups, for example Firelink Shrine and Anor Londo or Undead Burg and Blighttown.
+
+Expected sequence:
+
+1. Save point A.
+2. Travel normally to a different map and save point B.
+3. Select point A and warp.
+4. The game should enter its normal loading transition.
+5. QuickWarp should show `Loading target map...` and then `Warped`.
+6. The player should land at the exact saved coordinates rather than remain at the temporary bonfire anchor.
+7. Repeating the warp in the other direction should behave the same way.
+8. After closing Dark Souls: Remastered, `DSR QuickWarp.exe` should terminate automatically.
+
+Avoid using boss-room points for the first cross-map validation pass because several boss AreaIDs are negative/special-case IDs and should be validated separately after the standard world map groups are confirmed.
 
 ## Safety boundary
 
