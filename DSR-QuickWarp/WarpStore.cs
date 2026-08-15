@@ -16,6 +16,7 @@ namespace DSR_QuickWarp
         [DataMember(Order = 5)] public float Z { get; set; }
         [DataMember(Order = 6)] public float Angle { get; set; }
         [DataMember(Order = 7)] public string SavedAt { get; set; }
+        [DataMember(Order = 8, EmitDefaultValue = false)] public int MapGroup { get; set; }
 
         public override string ToString()
         {
@@ -44,6 +45,7 @@ namespace DSR_QuickWarp
         {
             _path = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "quickwarp.json");
             Database = Load();
+            NormalizeMapGroups(Database);
         }
 
         private WarpDatabase Load()
@@ -68,6 +70,25 @@ namespace DSR_QuickWarp
             {
                 return new WarpDatabase();
             }
+        }
+
+        private static void NormalizeMapGroups(WarpDatabase database)
+        {
+            if (database == null)
+                return;
+
+            NormalizeMapGroup(database.Quick);
+            if (database.Points == null)
+                database.Points = new List<WarpPoint>();
+            foreach (WarpPoint point in database.Points)
+                NormalizeMapGroup(point);
+        }
+
+        private static void NormalizeMapGroup(WarpPoint point)
+        {
+            // Backward compatibility with v0.1/v0.2 files that did not store MapGroup.
+            if (point != null && point.MapGroup <= 0 && point.AreaId > 0)
+                point.MapGroup = point.AreaId / 1000;
         }
 
         internal void Save()

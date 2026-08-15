@@ -36,6 +36,16 @@ namespace DSR_QuickWarp
             get { return _playerIns.ReadInt32((int)DSROffsets.PlayerIns.AreaID); }
         }
 
+        internal int MpAreaId
+        {
+            get { return _playerIns.ReadInt32((int)DSROffsets.PlayerIns.MPAreaID); }
+        }
+
+        internal int MapGroup
+        {
+            get { return WarpMap.GetGroup(AreaId, MpAreaId); }
+        }
+
         internal Position GetPosition()
         {
             return new Position(

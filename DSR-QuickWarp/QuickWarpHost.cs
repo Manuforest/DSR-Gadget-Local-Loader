@@ -1,33 +1,60 @@
 using System;
-using System.Collections.Generic;
-using System.Diagnostics;
-using System.Drawing;
+using System.Globalization;
+using System.IO;
+using System.Text;
 using System.Windows.Forms;
+using PropertyHook;
 
 namespace DSR_QuickWarp
 {
     internal sealed class QuickWarpHost : Form
     {
-        private const int HotkeyQuickSave = 1;
-        private const int HotkeyQuickWarp = 2;
-        private const int HotkeyMenu = 3;
-        private const int HotkeyExit = 4;
+        private sealed class PendingWarp
+        {
+            internal WarpPoint Target;
+            internal int MapGroup;
+            internal DateTime StartedUtc;
+            internal DateTime? MapReadySinceUtc;
+        }
 
+        private readonly object _gate = new object();
         private readonly QuickWarpHook _hook;
         private readonly WarpStore _store;
-        private readonly OverlayForm _overlay;
+        private readonly PipeBridge _pipe;
+        private readonly Timer _injectTimer;
+        private readonly Timer _warpTimer;
+        private int _injectedProcessId = -1;
+        private string _lastInjectError;
+        private bool _gameWasHooked;
+        private PendingWarp _pendingWarp;
+        private string _backgroundStatus = "Ready";
+        private bool _backgroundSuccess = true;
+        private bool _backgroundCloseMenu;
+        private DateTime _backgroundStatusUntilUtc = DateTime.MinValue;
 
         internal QuickWarpHost()
         {
             _hook = new QuickWarpHook();
             _store = new WarpStore();
-            _overlay = new OverlayForm(this);
+            _pipe = new PipeBridge(HandlePipeCommand);
 
+            _injectTimer = new Timer { Interval = 750 };
+            _injectTimer.Tick += OnInjectTick;
+
+            _warpTimer = new Timer { Interval = 100 };
+            _warpTimer.Tick += OnWarpTick;
+
+            _hook.OnHooked += OnGameHooked;
+            _hook.OnUnhooked += OnGameUnhooked;
+
+            Text = "DSR QuickWarp Host";
             ShowInTaskbar = false;
             FormBorderStyle = FormBorderStyle.FixedToolWindow;
             StartPosition = FormStartPosition.Manual;
-            Location = new Point(-32000, -32000);
-            Size = new Size(1, 1);
+            Left = -32000;
+            Top = -32000;
+            Width = 1;
+            Height = 1;
             Opacity = 0;
 
             Load += OnLoaded;
@@ -36,75 +63,220 @@ namespace DSR_QuickWarp
 
         private void OnLoaded(object sender, EventArgs e)
         {
-            RegisterHotkeys();
+            _pipe.Start();
             _hook.Start();
+            _injectTimer.Start();
+            _warpTimer.Start();
             Hide();
         }
 
         private void OnClosed(object sender, FormClosedEventArgs e)
         {
+            _injectTimer.Stop();
+            _warpTimer.Stop();
+            _hook.OnHooked -= OnGameHooked;
+            _hook.OnUnhooked -= OnGameUnhooked;
+            _pipe.Stop();
             _hook.Stop();
-            NativeMethods.UnregisterHotKey(Handle, HotkeyQuickSave);
-            NativeMethods.UnregisterHotKey(Handle, HotkeyQuickWarp);
-            NativeMethods.UnregisterHotKey(Handle, HotkeyMenu);
-            NativeMethods.UnregisterHotKey(Handle, HotkeyExit);
         }
 
-        private void RegisterHotkeys()
+        private void OnGameHooked(object sender, PHEventArgs e)
         {
-            NativeMethods.RegisterHotKey(Handle, HotkeyQuickSave, NativeMethods.MOD_NOREPEAT, NativeMethods.VK_F6);
-            NativeMethods.RegisterHotKey(Handle, HotkeyQuickWarp, NativeMethods.MOD_NOREPEAT, NativeMethods.VK_F7);
-            NativeMethods.RegisterHotKey(Handle, HotkeyMenu, NativeMethods.MOD_NOREPEAT, NativeMethods.VK_F8);
-            NativeMethods.RegisterHotKey(Handle, HotkeyExit, NativeMethods.MOD_CONTROL | NativeMethods.MOD_NOREPEAT, NativeMethods.VK_F8);
+            _gameWasHooked = true;
         }
 
-        protected override void WndProc(ref Message m)
+        private void OnGameUnhooked(object sender, PHEventArgs e)
         {
-            if (m.Msg == NativeMethods.WM_HOTKEY)
+            if (!_gameWasHooked || IsDisposed || Disposing)
+                return;
+
+            try
             {
-                int id = m.WParam.ToInt32();
+                if (IsHandleCreated)
+                    BeginInvoke((Action)Close);
+            }
+            catch (InvalidOperationException)
+            {
+            }
+        }
 
-                if (id == HotkeyExit)
-                {
-                    Close();
-                    return;
-                }
-
-                if (id == HotkeyMenu)
-                {
-                    if (_overlay.Visible)
-                        HideOverlay();
-                    else if (IsGameForeground())
-                        ShowOverlay();
-                    return;
-                }
-
-                if (!IsGameForeground())
-                {
-                    base.WndProc(ref m);
-                    return;
-                }
-
-                if (id == HotkeyQuickSave)
-                    SaveQuickPoint();
-                else if (id == HotkeyQuickWarp)
-                    WarpQuickPoint();
+        private void OnInjectTick(object sender, EventArgs e)
+        {
+            if (_gameWasHooked && !_hook.Hooked)
+            {
+                Close();
+                return;
             }
 
-            base.WndProc(ref m);
+            if (!_hook.Hooked || _hook.Process == null || _hook.Process.HasExited)
+            {
+                _injectedProcessId = -1;
+                return;
+            }
+
+            int processId = _hook.Process.Id;
+            if (_injectedProcessId == processId)
+                return;
+
+            string overlayPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "DSR QuickWarp Overlay.dll");
+            if (!File.Exists(overlayPath))
+            {
+                LogOnce("Overlay DLL not found: " + overlayPath);
+                return;
+            }
+
+            string error;
+            if (OverlayInjector.Inject(_hook.Process, overlayPath, out error))
+            {
+                _injectedProcessId = processId;
+                _lastInjectError = null;
+                Log("Injected overlay into DarkSoulsRemastered.exe (PID " + processId + ").");
+            }
+            else
+            {
+                LogOnce("Overlay injection failed: " + error);
+            }
         }
 
-        private bool IsGameForeground()
+        private void OnWarpTick(object sender, EventArgs e)
         {
-            if (_overlay.Visible)
-                return true;
-            if (!_hook.Hooked || _hook.Process == null)
-                return false;
+            lock (_gate)
+            {
+                if (_pendingWarp == null)
+                    return;
 
-            IntPtr foreground = NativeMethods.GetForegroundWindow();
-            uint processId;
-            NativeMethods.GetWindowThreadProcessId(foreground, out processId);
-            return processId == (uint)_hook.Process.Id;
+                DateTime now = DateTime.UtcNow;
+                if ((now - _pendingWarp.StartedUtc).TotalSeconds > 20)
+                {
+                    _pendingWarp = null;
+                    SetBackgroundStatus("Cross-map warp timed out.", false, false, 4);
+                    return;
+                }
+
+                if (!_hook.Ready)
+                    return;
+
+                try
+                {
+                    QuickWarpPlayer player = _hook.GetPlayer();
+                    if (!player.Ready)
+                        return;
+
+                    if (player.MapGroup != _pendingWarp.MapGroup)
+                    {
+                        _pendingWarp.MapReadySinceUtc = null;
+                        return;
+                    }
+
+                    if (!_pendingWarp.MapReadySinceUtc.HasValue)
+                    {
+                        _pendingWarp.MapReadySinceUtc = now;
+                        return;
+                    }
+
+                    if ((now - _pendingWarp.MapReadySinceUtc.Value).TotalMilliseconds < 450)
+                        return;
+
+                    WarpPoint target = _pendingWarp.Target;
+                    player.Warp(new QuickWarpPlayer.Position(target.X, target.Y, target.Z, target.Angle));
+                    _pendingWarp = null;
+                    SetBackgroundStatus("Warped", true, true, 3);
+                }
+                catch (Exception ex)
+                {
+                    Log("Pending cross-map warp check failed: " + ex.Message);
+                }
+            }
+        }
+
+        private string HandlePipeCommand(string command)
+        {
+            lock (_gate)
+            {
+                bool success = true;
+                bool closeMenu = false;
+                string message = "Ready";
+
+                try
+                {
+                    string[] parts = (command ?? string.Empty).Trim().Split('|');
+                    string op = parts.Length == 0 ? string.Empty : parts[0].ToUpperInvariant();
+
+                    switch (op)
+                    {
+                        case "STATE":
+                        case "PING":
+                            GetBackgroundStatus(out success, out closeMenu, out message);
+                            break;
+
+                        case "SAVE_QUICK":
+                            message = SaveQuickPoint();
+                            success = message == "Quick point saved";
+                            break;
+
+                        case "WARP_QUICK":
+                            message = WarpQuickPoint();
+                            success = IsWarpAccepted(message);
+                            closeMenu = success;
+                            break;
+
+                        case "SAVE":
+                            message = SavePermanentPoint();
+                            success = message.EndsWith(" saved", StringComparison.Ordinal);
+                            break;
+
+                        case "WARP":
+                        {
+                            int index;
+                            if (parts.Length < 2 || !int.TryParse(parts[1], out index))
+                            {
+                                success = false;
+                                message = "Invalid saved-point index.";
+                            }
+                            else
+                            {
+                                message = WarpPermanentPoint(index);
+                                success = IsWarpAccepted(message);
+                                closeMenu = success;
+                            }
+                            break;
+                        }
+
+                        case "DELETE":
+                        {
+                            int index;
+                            if (parts.Length < 2 || !int.TryParse(parts[1], out index))
+                            {
+                                success = false;
+                                message = "Invalid saved-point index.";
+                            }
+                            else
+                            {
+                                message = DeletePermanentPoint(index);
+                                success = message.EndsWith(" deleted", StringComparison.Ordinal);
+                            }
+                            break;
+                        }
+
+                        default:
+                            success = false;
+                            message = "Unknown command: " + op;
+                            break;
+                    }
+                }
+                catch (Exception ex)
+                {
+                    success = false;
+                    message = "Host error: " + ex.Message;
+                }
+
+                return BuildSnapshot(success, closeMenu, message);
+            }
+        }
+
+        private static bool IsWarpAccepted(string message)
+        {
+            return message == "Warped" || message == "Loading target map...";
         }
 
         private bool TryGetCurrentPoint(string name, out WarpPoint point, out string error)
@@ -114,7 +286,7 @@ namespace DSR_QuickWarp
 
             if (!_hook.Ready)
             {
-                error = "Waiting for Dark Souls Remastered...";
+                error = "Game/player is not ready.";
                 return false;
             }
 
@@ -132,12 +304,21 @@ namespace DSR_QuickWarp
                 {
                     Name = name,
                     AreaId = player.AreaId,
+                    MapGroup = player.MapGroup,
                     X = pos.X,
                     Y = pos.Y,
                     Z = pos.Z,
                     Angle = pos.Angle,
                     SavedAt = DateTime.Now.ToString("s")
                 };
+
+                if (point.MapGroup <= 0)
+                {
+                    error = "This location has no supported map group.";
+                    point = null;
+                    return false;
+                }
+
                 return true;
             }
             catch (Exception ex)
@@ -147,23 +328,19 @@ namespace DSR_QuickWarp
             }
         }
 
-        internal void SaveQuickPoint()
+        private string SaveQuickPoint()
         {
             WarpPoint point;
             string error;
             if (!TryGetCurrentPoint("Quick", out point, out error))
-            {
-                ShowToast(error, true);
-                return;
-            }
+                return error;
 
             _store.Database.Quick = point;
             _store.Save();
-            ShowToast("Quick point saved", false);
-            _overlay.RefreshPoints();
+            return "Quick point saved";
         }
 
-        internal string SavePermanentPoint()
+        private string SavePermanentPoint()
         {
             string name = "Point " + (_store.Database.Points.Count + 1).ToString("00");
             WarpPoint point;
@@ -173,23 +350,17 @@ namespace DSR_QuickWarp
 
             _store.Database.Points.Add(point);
             _store.Save();
-            _overlay.RefreshPoints();
             return name + " saved";
         }
 
-        private void WarpQuickPoint()
+        private string WarpQuickPoint()
         {
             if (_store.Database.Quick == null)
-            {
-                ShowToast("No quick point saved", true);
-                return;
-            }
-
-            string result = WarpTo(_store.Database.Quick);
-            ShowToast(result, result != "Warped");
+                return "No quick point saved.";
+            return WarpTo(_store.Database.Quick);
         }
 
-        internal string WarpPermanentPoint(int index)
+        private string WarpPermanentPoint(int index)
         {
             if (index < 0 || index >= _store.Database.Points.Count)
                 return "Select a saved point.";
@@ -198,6 +369,9 @@ namespace DSR_QuickWarp
 
         private string WarpTo(WarpPoint target)
         {
+            if (_pendingWarp != null)
+                return "Another cross-map warp is already in progress.";
+
             if (!_hook.Ready)
                 return "Game/player is not ready.";
 
@@ -207,11 +381,34 @@ namespace DSR_QuickWarp
                 if (!player.Ready)
                     return "Player is not loaded yet.";
 
-                if (player.AreaId != target.AreaId)
-                    return "Different area: v0.1 blocks cross-area warp.";
+                int targetGroup = WarpMap.GetGroup(target);
+                if (targetGroup <= 0)
+                    return "Saved point has no supported map group.";
 
-                player.Warp(new QuickWarpPlayer.Position(target.X, target.Y, target.Z, target.Angle));
-                return "Warped";
+                if (player.MapGroup == targetGroup)
+                {
+                    player.Warp(new QuickWarpPlayer.Position(target.X, target.Y, target.Z, target.Angle));
+                    SetBackgroundStatus("Warped", true, true, 2);
+                    return "Warped";
+                }
+
+                int anchorBonfire;
+                if (!WarpMap.TryGetAnchorBonfire(targetGroup, out anchorBonfire))
+                    return "No safe loading anchor is known for this map.";
+
+                string error;
+                if (!_hook.TryBonfireWarp(anchorBonfire, out error))
+                    return error;
+
+                _pendingWarp = new PendingWarp
+                {
+                    Target = target,
+                    MapGroup = targetGroup,
+                    StartedUtc = DateTime.UtcNow,
+                    MapReadySinceUtc = null
+                };
+                SetBackgroundStatus("Loading target map...", true, true, 25);
+                return "Loading target map...";
             }
             catch (Exception ex)
             {
@@ -219,7 +416,7 @@ namespace DSR_QuickWarp
             }
         }
 
-        internal string DeletePermanentPoint(int index)
+        private string DeletePermanentPoint(int index)
         {
             if (index < 0 || index >= _store.Database.Points.Count)
                 return "Select a saved point.";
@@ -227,45 +424,94 @@ namespace DSR_QuickWarp
             string name = _store.Database.Points[index].Name;
             _store.Database.Points.RemoveAt(index);
             _store.Save();
-            _overlay.RefreshPoints();
             return name + " deleted";
         }
 
-        internal IList<WarpPoint> GetPermanentPoints()
+        private void SetBackgroundStatus(string message, bool success, bool closeMenu, int seconds)
         {
-            return _store.Database.Points.AsReadOnly();
+            _backgroundStatus = message;
+            _backgroundSuccess = success;
+            _backgroundCloseMenu = closeMenu;
+            _backgroundStatusUntilUtc = DateTime.UtcNow.AddSeconds(seconds);
         }
 
-        internal WarpPoint GetQuickPoint()
+        private void GetBackgroundStatus(out bool success, out bool closeMenu, out string message)
         {
-            return _store.Database.Quick;
+            if (_backgroundStatusUntilUtc > DateTime.UtcNow)
+            {
+                success = _backgroundSuccess;
+                closeMenu = _backgroundCloseMenu;
+                message = _backgroundStatus;
+            }
+            else
+            {
+                success = true;
+                closeMenu = false;
+                message = "Ready";
+            }
         }
 
-        internal void ShowOverlay()
+        private string BuildSnapshot(bool success, bool closeMenu, string message)
         {
-            _overlay.RefreshPoints();
-            _overlay.Reposition();
-            _overlay.Show();
-            _overlay.Activate();
+            StringBuilder builder = new StringBuilder();
+            builder.Append("RESULT|")
+                .Append(success ? "1" : "0").Append('|')
+                .Append(closeMenu ? "1" : "0").Append('|')
+                .Append(Encode(message)).Append('\n');
+
+            if (_store.Database.Quick == null)
+            {
+                builder.Append("QUICK|-\n");
+            }
+            else
+            {
+                builder.Append("QUICK|");
+                AppendPoint(builder, _store.Database.Quick);
+            }
+
+            for (int i = 0; i < _store.Database.Points.Count; i++)
+            {
+                builder.Append("POINT|").Append(i).Append('|');
+                AppendPoint(builder, _store.Database.Points[i]);
+            }
+
+            builder.Append("END\n");
+            return builder.ToString();
         }
 
-        internal void HideOverlay()
+        private static void AppendPoint(StringBuilder builder, WarpPoint point)
         {
-            _overlay.Hide();
-            RestoreGameFocus();
+            builder.Append(Encode(point.Name)).Append('|')
+                .Append(point.AreaId.ToString(CultureInfo.InvariantCulture)).Append('|')
+                .Append(point.X.ToString("R", CultureInfo.InvariantCulture)).Append('|')
+                .Append(point.Y.ToString("R", CultureInfo.InvariantCulture)).Append('|')
+                .Append(point.Z.ToString("R", CultureInfo.InvariantCulture)).Append('|')
+                .Append(point.Angle.ToString("R", CultureInfo.InvariantCulture)).Append('\n');
         }
 
-        internal void RestoreGameFocus()
+        private static string Encode(string value)
         {
-            if (_hook.Hooked && _hook.Process != null && _hook.Process.MainWindowHandle != IntPtr.Zero)
-                NativeMethods.SetForegroundWindow(_hook.Process.MainWindowHandle);
+            return Uri.EscapeDataString(value ?? string.Empty);
         }
 
-        private void ShowToast(string text, bool isError)
+        private void LogOnce(string text)
         {
-            ToastForm toast = new ToastForm(text, isError);
-            toast.PositionFor(_hook);
-            toast.Show();
+            if (string.Equals(_lastInjectError, text, StringComparison.Ordinal))
+                return;
+            _lastInjectError = text;
+            Log(text);
+        }
+
+        private static void Log(string text)
+        {
+            try
+            {
+                string path = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "quickwarp.log");
+                File.AppendAllText(path, DateTime.Now.ToString("s") + "  " + text + Environment.NewLine);
+            }
+            catch
+            {
+            }
         }
     }
 }
