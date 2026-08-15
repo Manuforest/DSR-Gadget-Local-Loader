@@ -169,7 +169,7 @@ namespace quickwarp
             ImGui::EndChild();
 
             ImGui::TextDisabled("Up/Down select   Enter warp   Insert save   Delete remove   Esc close");
-            ImGui::TextDisabled("v0.2 safety: same-area warp only");
+            ImGui::TextDisabled("Cross-map: game map load + precise saved position");
             if (!gStatus.empty() && gStatus != "Ready")
             {
                 if (gStatusSuccess)
