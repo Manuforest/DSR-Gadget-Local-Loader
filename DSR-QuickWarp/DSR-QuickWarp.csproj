@@ -48,6 +48,7 @@
     <Compile Include="PipeBridge.cs" />
     <Compile Include="QuickWarpHook.cs" />
     <Compile Include="QuickWarpPlayer.cs" />
+    <Compile Include="WarpMap.cs" />
     <Compile Include="WarpStore.cs" />
     <Compile Include="QuickWarpHost.cs" />
     <Compile Include="..\DSR-Gadget\Util\DSROffsets.cs">
