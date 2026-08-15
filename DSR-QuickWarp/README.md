@@ -23,15 +23,18 @@ This first version is a lightweight external process with a borderless top-most 
 
 ## Build
 
-Clone with submodules:
+The upstream repository references PropertyHook but does not currently contain a checked-in submodule gitlink. The included script fetches that dependency when needed.
+
+From PowerShell:
 
 ```
-git clone --recursive <your-fork-url>
+powershell -ExecutionPolicy Bypass -File .\DSR-QuickWarp\build.ps1
 ```
 
-Build x64 Release:
+Or manually:
 
 ```
+git clone https://github.com/Meikk99/PropertyHook.git PropertyHook
 msbuild DSR-QuickWarp\DSR-QuickWarp.csproj /p:Configuration=Release /p:Platform=x64
 ```
 

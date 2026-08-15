@@ -18,8 +18,13 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
-        with:
-          submodules: recursive
+
+      - name: Fetch PropertyHook dependency
+        shell: pwsh
+        run: |
+          if (!(Test-Path 'PropertyHook\PropertyHook\PropertyHook.csproj')) {
+            git clone --depth 1 https://github.com/Meikk99/PropertyHook.git PropertyHook
+          }
 
       - uses: microsoft/setup-msbuild@v2
 
